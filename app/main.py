@@ -9,6 +9,7 @@ from app.operations import calculate, DivisionByZeroError, InvalidOperationError
 from app.logger_config import setup_logging, get_logger
 from app.database import init_db
 from app.users import router as users_router
+from app.calculations import router as calculations_router
 
 # Initialize logging
 logger = setup_logging()
@@ -25,6 +26,7 @@ async def lifespan(app: FastAPI):
     logger.info("API Documentation available at: /docs")
     logger.info("API Health check available at: /health")
     logger.info("User endpoints available at: /users")
+    logger.info("Calculation endpoints available at: /calculations")
     
     yield
     
@@ -39,8 +41,9 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Include user router
+# Include routers
 app.include_router(users_router)
+app.include_router(calculations_router)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
