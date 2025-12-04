@@ -2,17 +2,59 @@
 User CRUD operations and authentication endpoints.
 """
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from typing import List
+from datetime import timedelta
 from app.database import get_db
 from app.models import User
-from app.schemas import UserCreate, UserResponse, UserLogin, UserUpdate, Message
-from app.auth import hash_password, verify_password
+from app.schemas import UserCreate, UserResponse, UserLogin, UserUpdate, Message, Token
+from app.auth import hash_password, verify_password, create_access_token, decode_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, security
 from app.logger_config import get_logger
 
 logger = get_logger()
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+def get_current_user_dependency(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+) -> User:
+    """
+    Dependency to get the current authenticated user from JWT token.
+    
+    Args:
+        credentials: HTTP bearer token credentials
+        db: Database session
+        
+    Returns:
+        User object if token is valid
+        
+    Raises:
+        HTTPException: If token is invalid or user not found
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    
+    if payload is None:
+        raise credentials_exception
+    
+    username: str = payload.get("sub")
+    if username is None:
+        raise credentials_exception
+    
+    user = db.query(User).filter(User.username == username).first()
+    if user is None:
+        raise credentials_exception
+    
+    return user
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -63,10 +105,16 @@ async def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
 @router.post("/login")
 async def login_user(login_data: UserLogin, db: Session = Depends(get_db)):
     """
-    Authenticate a user and return user information.
+    Authenticate a user and return user information with access token.
     
     - **username**: Username or email
     - **password**: User password
+    
+    Returns:
+    - **message**: Success message
+    - **user**: User information
+    - **access_token**: JWT access token for authentication
+    - **token_type**: Token type (bearer)
     """
     logger.info(f"Login attempt for: {login_data.username}")
     
@@ -97,11 +145,34 @@ async def login_user(login_data: UserLogin, db: Session = Depends(get_db)):
             detail="User account is inactive"
         )
     
+    # Create access token
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    
     logger.info(f"User logged in successfully: {user.username} (ID: {user.id})")
     return {
         "message": "Login successful",
-        "user": UserResponse.model_validate(user)
+        "user": UserResponse.model_validate(user),
+        "access_token": access_token,
+        "token_type": "bearer"
     }
+
+
+@router.get("/me", response_model=UserResponse)
+async def get_current_user_info(current_user: User = Depends(get_current_user_dependency)):
+    """
+    Get current authenticated user's information.
+    
+    Requires valid JWT token in Authorization header.
+    Format: Authorization: Bearer <token>
+    
+    Returns:
+    - User information for the authenticated user
+    """
+    logger.info(f"Getting current user info: {current_user.username} (ID: {current_user.id})")
+    return current_user
 
 
 @router.get("", response_model=List[UserResponse])
