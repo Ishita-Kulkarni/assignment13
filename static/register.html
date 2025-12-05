@@ -382,9 +382,9 @@
             if (this.value.length > 0) {
                 const username = this.value;
                 if (username.length < 3) {
-                    showError(usernameError, 'Username must be at least 3 characters');
+                    showError(usernameError, 'Username must be 3-50 characters');
                 } else if (username.length > 50) {
-                    showError(usernameError, 'Username must be 50 characters or less');
+                    showError(usernameError, 'Username must be 3-50 characters');
                 } else {
                     showSuccess(this);
                 }
@@ -460,11 +460,8 @@
             if (username.length === 0) {
                 showError(usernameError, 'Username is required');
                 isValid = false;
-            } else if (username.length < 3) {
-                showError(usernameError, 'Username must be at least 3 characters');
-                isValid = false;
-            } else if (username.length > 50) {
-                showError(usernameError, 'Username must be 50 characters or less');
+            } else if (username.length < 3 || username.length > 50) {
+                showError(usernameError, 'Username must be 3-50 characters');
                 isValid = false;
             }
 

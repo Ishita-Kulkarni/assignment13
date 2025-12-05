@@ -17,8 +17,11 @@ function generateUniqueUser() {
  * Helper function to clear browser storage
  */
 async function clearStorage(page) {
-  // Navigate to a page first to access localStorage
-  await page.goto('/static/login.html');
+  // Check if we're already on a page, if not navigate to login
+  const url = page.url();
+  if (!url || url === 'about:blank' || !url.includes('localhost')) {
+    await page.goto('/static/login.html');
+  }
   await page.evaluate(() => {
     localStorage.clear();
     sessionStorage.clear();
