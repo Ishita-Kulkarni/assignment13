@@ -1,0 +1,303 @@
+name: CI/CD with E2E Tests and Docker Hub Deployment
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/fastapi-user-management
+
+jobs:
+  # Job 1: Unit and Integration Tests
+  unit-tests:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: calculator_user
+          POSTGRES_PASSWORD: calculator_pass
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    
+    env:
+      TEST_DATABASE_URL: postgresql://calculator_user:calculator_pass@localhost:5432/test_db
+      DATABASE_URL: postgresql://calculator_user:calculator_pass@localhost:5432/test_db
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-test.txt
+    
+    - name: Lint with flake8
+      run: |
+        pip install flake8
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=venv,htmlcov,.pytest_cache,node_modules
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics --exclude=venv,htmlcov,.pytest_cache,node_modules
+    
+    - name: Run all Python tests with coverage
+      run: |
+        pytest tests/ -v --cov=app --cov-report=xml --cov-report=term-missing --ignore=tests/e2e
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+
+  # Job 2: E2E Tests with Playwright
+  e2e-tests:
+    name: E2E Tests with Playwright
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: calculator_user
+          POSTGRES_PASSWORD: calculator_pass
+          POSTGRES_DB: calculator_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    env:
+      DATABASE_URL: postgresql://calculator_user:calculator_pass@localhost:5432/calculator_db
+      SECRET_KEY: test-secret-key-for-ci-cd-do-not-use-in-production
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install Node.js dependencies
+      run: npm ci
+    
+    - name: Install Playwright browsers
+      run: npx playwright install --with-deps chromium
+    
+    - name: Start FastAPI application in background
+      run: |
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+        echo $! > fastapi.pid
+        # Wait for server to be ready
+        timeout 30 bash -c 'until curl -f http://localhost:8000/health 2>/dev/null; do sleep 1; done' || exit 1
+        echo "FastAPI server is ready"
+    
+    - name: Run Playwright tests
+      run: npm test
+    
+    - name: Upload Playwright report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: playwright-report
+        path: playwright-report/
+        retention-days: 30
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: playwright-results
+        path: test-results/
+        retention-days: 30
+    
+    - name: Stop FastAPI application
+      if: always()
+      run: |
+        if [ -f fastapi.pid ]; then
+          kill $(cat fastapi.pid) || true
+        fi
+
+  # Job 3: Build and Test Docker Image
+  docker-build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [unit-tests, e2e-tests]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: false
+        tags: ${{ env.IMAGE_NAME }}:test
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        load: true
+    
+    - name: Test Docker image
+      run: |
+        # Create .env file for testing
+        cat > .env << EOF
+        DATABASE_URL=postgresql://calculator_user:calculator_pass@postgres:5432/calculator_db
+        SECRET_KEY=test-secret-key
+        ALGORITHM=HS256
+        ACCESS_TOKEN_EXPIRE_MINUTES=30
+        EOF
+        
+        # Start services with docker-compose
+        docker-compose up -d postgres
+        
+        # Wait for postgres to be ready
+        timeout 30 bash -c 'until docker-compose exec -T postgres pg_isready -U calculator_user; do sleep 1; done'
+        
+        # Run the built image
+        docker run -d --name test-app \
+          --network assignment13_calculator_network \
+          -e DATABASE_URL=postgresql://calculator_user:calculator_pass@postgres:5432/calculator_db \
+          -e SECRET_KEY=test-secret-key \
+          -e ALGORITHM=HS256 \
+          -p 8000:8000 \
+          ${{ env.IMAGE_NAME }}:test
+        
+        # Wait for app to be ready
+        timeout 30 bash -c 'until curl -f http://localhost:8000/health 2>/dev/null; do sleep 1; done'
+        
+        # Test the health endpoint
+        curl -f http://localhost:8000/health || exit 1
+        
+        # Test the docs endpoint
+        curl -f http://localhost:8000/docs || exit 1
+        
+        echo "Docker image test passed!"
+        
+        # Cleanup
+        docker stop test-app
+        docker rm test-app
+        docker-compose down
+
+  # Job 4: Push to Docker Hub (only on main branch and if all tests pass)
+  docker-push:
+    name: Push to Docker Hub
+    runs-on: ubuntu-latest
+    needs: [unit-tests, e2e-tests, docker-build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        token: ${{ secrets.DOCKERHUB_TOKEN }}
+    
+    - name: Extract metadata (tags, labels) for Docker
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+    
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
+    - name: Update Docker Hub description
+      uses: peter-evans/dockerhub-description@v4
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+        repository: ${{ env.IMAGE_NAME }}
+        short-description: FastAPI User Management Application with JWT Authentication
+        readme-filepath: ./README.md
+      continue-on-error: true
+
+  # Job 5: Summary
+  summary:
+    name: Workflow Summary
+    runs-on: ubuntu-latest
+    needs: [unit-tests, e2e-tests, docker-build, docker-push]
+    if: always()
+    
+    steps:
+    - name: Check workflow status
+      run: |
+        echo "## Workflow Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Unit Tests**: ${{ needs.unit-tests.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **E2E Tests**: ${{ needs.e2e-tests.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Docker Build**: ${{ needs.docker-build.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Docker Push**: ${{ needs.docker-push.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ needs.docker-push.result }}" == "success" ]; then
+          echo "✅ **Docker image successfully pushed to Docker Hub!**" >> $GITHUB_STEP_SUMMARY
+        elif [ "${{ needs.docker-push.result }}" == "skipped" ]; then
+          echo "⏭️ **Docker push skipped** (not on main branch or PR)" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Workflow failed** - Check the logs above" >> $GITHUB_STEP_SUMMARY
+        fi
