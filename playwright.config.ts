@@ -70,11 +70,10 @@ export default defineConfig({
   ],
 
   /* Run your local dev server before starting the tests */
-  webServer: {
-    command: '/home/ishit/assignment13/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000',
-    url: 'http://localhost:8000',
-    reuseExistingServer: !process.env.CI,
+  webServer: process.env.CI ? undefined : {
+    command: 'uvicorn app.main:app --host 0.0.0.0 --port 8000',
+    url: 'http://localhost:8000/health',
+    reuseExistingServer: true,
     timeout: 120 * 1000,
-    cwd: '/home/ishit/assignment13/assignment13',
   },
 });
