@@ -380,8 +380,11 @@
         usernameInput.addEventListener('input', function() {
             hideError(usernameError);
             if (this.value.length > 0) {
-                if (!validateUsername(this.value)) {
-                    showError(usernameError, 'Username must be 3-50 characters');
+                const username = this.value;
+                if (username.length < 3) {
+                    showError(usernameError, 'Username must be at least 3 characters');
+                } else if (username.length > 50) {
+                    showError(usernameError, 'Username must be 50 characters or less');
                 } else {
                     showSuccess(this);
                 }
@@ -403,15 +406,15 @@
             hideError(passwordError);
             
             if (this.value.length > 0) {
+                // Always show password strength when there's input
+                const strength = checkPasswordStrength(this.value);
+                passwordStrength.textContent = strength.text;
+                passwordStrength.className = `password-strength show ${strength.level}`;
+                
                 if (!validatePassword(this.value)) {
                     showError(passwordError, 'Password must be at least 8 characters');
                 } else {
                     showSuccess(this);
-                    
-                    // Show password strength
-                    const strength = checkPasswordStrength(this.value);
-                    passwordStrength.textContent = strength.text;
-                    passwordStrength.className = `password-strength show ${strength.level}`;
                 }
             } else {
                 passwordStrength.classList.remove('show');
@@ -443,11 +446,25 @@
             // Clear previous alerts
             alertContainer.innerHTML = '';
 
+            // Clear all errors first
+            hideError(usernameError);
+            hideError(emailError);
+            hideError(passwordError);
+            hideError(confirmPasswordError);
+
             // Validate all fields
             let isValid = true;
-
-            if (!validateUsername(usernameInput.value)) {
-                showError(usernameError, 'Username must be 3-50 characters');
+            const username = usernameInput.value;
+            
+            // Username validation
+            if (username.length === 0) {
+                showError(usernameError, 'Username is required');
+                isValid = false;
+            } else if (username.length < 3) {
+                showError(usernameError, 'Username must be at least 3 characters');
+                isValid = false;
+            } else if (username.length > 50) {
+                showError(usernameError, 'Username must be 50 characters or less');
                 isValid = false;
             }
 

@@ -359,6 +359,10 @@
             // Validate fields
             let isValid = true;
 
+            // Clear all errors first
+            hideError(usernameError);
+            hideError(passwordError);
+
             if (!validateUsername(usernameInput.value)) {
                 showError(usernameError, 'Please enter your username or email');
                 isValid = false;
