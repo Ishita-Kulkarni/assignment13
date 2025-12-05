@@ -8,7 +8,7 @@ from typing import List
 from datetime import timedelta
 from app.database import get_db
 from app.models import User
-from app.schemas import UserCreate, UserResponse, UserLogin, UserUpdate, Message, Token
+from app.schemas import UserCreate, UserResponse, UserLogin, UserUpdate, Message, Token, AuthResponse
 from app.auth import hash_password, verify_password, create_access_token, decode_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, security
 from app.logger_config import get_logger
 
@@ -57,14 +57,20 @@ def get_current_user_dependency(
     return user
 
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
 async def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
     """
-    Register a new user.
+    Register a new user and return JWT token.
     
     - **username**: Unique username (3-50 characters)
     - **email**: Valid email address
     - **password**: Password (minimum 8 characters)
+    
+    Returns:
+    - **message**: Success message
+    - **user**: User information
+    - **access_token**: JWT access token for authentication
+    - **token_type**: Token type (bearer)
     """
     logger.info(f"Registration attempt for username: {user_data.username}, email: {user_data.email}")
     
@@ -98,11 +104,22 @@ async def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_user)
     
+    # Create access token for the newly registered user
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": new_user.username}, expires_delta=access_token_expires
+    )
+    
     logger.info(f"User registered successfully: {new_user.username} (ID: {new_user.id})")
-    return new_user
+    return {
+        "message": "Registration successful",
+        "user": UserResponse.model_validate(new_user),
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
 
 
-@router.post("/login")
+@router.post("/login", response_model=AuthResponse)
 async def login_user(login_data: UserLogin, db: Session = Depends(get_db)):
     """
     Authenticate a user and return user information with access token.

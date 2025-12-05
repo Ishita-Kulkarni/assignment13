@@ -99,6 +99,32 @@ class Token(BaseModel):
     )
 
 
+class AuthResponse(BaseModel):
+    """Schema for authentication response (login/register)."""
+    message: str
+    user: UserResponse
+    access_token: str
+    token_type: str = "bearer"
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "message": "Login successful",
+                "user": {
+                    "id": 1,
+                    "username": "johndoe",
+                    "email": "john.doe@example.com",
+                    "created_at": "2025-11-19T12:00:00",
+                    "updated_at": "2025-11-19T12:00:00",
+                    "is_active": True
+                },
+                "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                "token_type": "bearer"
+            }
+        }
+    )
+
+
 class Message(BaseModel):
     """Generic message response schema."""
     message: str
